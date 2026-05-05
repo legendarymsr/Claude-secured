@@ -1,63 +1,77 @@
 # Claude-secured
 
-A practical security guide for [Claude Code](https://code.claude.com) — Anthropic's agentic coding CLI. Covers the permission system, hooks, MCP servers, prompt injection, network security, and copy-paste-ready example configurations.
+A security guide for [Claude Code](https://code.claude.com) — Anthropic's agentic coding CLI.
 
-## Who this is for
+> Claude Code can read files, run shell commands, make network requests, and commit code. This guide covers how to control what it can do and how to keep your machine and credentials safe.
 
-- **Individual developers** who want to understand what Claude Code can and cannot do on their machine
-- **Teams** setting up shared `.claude/settings.json` with sensible defaults
-- **Enterprise/security engineers** enforcing policy via managed settings and audit hooks
+---
 
-## Quick start
+## Start here
 
-Copy [`examples/settings/settings.minimal.jsonc`](examples/settings/settings.minimal.jsonc) into your project's `.claude/settings.json` (strip comments first — Claude Code reads standard JSON). This gives you a restrictive baseline to expand from.
+**New to Claude Code security?** Read these three things first:
+
+1. Copy [`examples/settings/settings.minimal.jsonc`](examples/settings/settings.minimal.jsonc) into your project as `.claude/settings.json` (strip comments)
+2. Add deny rules for your credential files (`.env`, `~/.aws`, `~/.ssh`)
+3. Always review what Claude proposes before approving it
 
 ---
 
 ## Documentation
 
-| File | Summary |
-|------|---------|
-| [docs/01-overview.md](docs/01-overview.md) | What Claude Code is, the agentic loop, and why it's a different security model than a chatbot |
-| [docs/02-permissions.md](docs/02-permissions.md) | Permission modes, rule syntax for Bash/Read/Edit/WebFetch/MCP, compound commands |
-| [docs/03-settings.md](docs/03-settings.md) | The four configuration scopes, settings.json schema, sensitive file protection |
-| [docs/04-hooks.md](docs/04-hooks.md) | Hook event types, stdin/stdout payload format, exit codes, security implications |
-| [docs/05-mcp-security.md](docs/05-mcp-security.md) | MCP server risks, vetting checklist, scoping permissions to specific tools |
-| [docs/06-prompt-injection.md](docs/06-prompt-injection.md) | How injection works in an agentic context, built-in protections, user defenses |
-| [docs/07-network-api-security.md](docs/07-network-api-security.md) | What data leaves your machine, TLS, Zero Data Retention, telemetry opt-outs |
-| [docs/08-best-practices.md](docs/08-best-practices.md) | Checklist for individual developers, teams, and enterprise/CI environments |
-| [docs/09-common-mistakes.md](docs/09-common-mistakes.md) | Anti-patterns with their consequences and correct alternatives |
-| [docs/10-slash-commands.md](docs/10-slash-commands.md) | Security-relevant built-in commands and risks of custom slash commands |
-| [docs/11-claude-md-guide.md](docs/11-claude-md-guide.md) | What CLAUDE.md is, how to write it safely, and its security limits |
-| [docs/12-secrets-management.md](docs/12-secrets-management.md) | How to pass credentials to Claude Code without exposing them |
-| [docs/13-ci-cd-guide.md](docs/13-ci-cd-guide.md) | Running Claude Code safely in automated pipelines (GitHub Actions, GitLab CI) |
+| Guide | One-line summary |
+|-------|-----------------|
+| [01 — Overview](docs/01-overview.md) | What Claude Code is and why it's a different security model |
+| [02 — Permissions](docs/02-permissions.md) | How to control what Claude can and can't do |
+| [03 — Settings](docs/03-settings.md) | Config files, scopes, and the settings schema |
+| [04 — Hooks](docs/04-hooks.md) | Scripts that run before/after Claude's actions |
+| [05 — MCP Security](docs/05-mcp-security.md) | Risks of third-party tool extensions |
+| [06 — Prompt Injection](docs/06-prompt-injection.md) | How malicious content tries to hijack Claude |
+| [07 — Network & API Security](docs/07-network-api-security.md) | What data leaves your machine |
+| [08 — Best Practices](docs/08-best-practices.md) | Checklists for devs, teams, and enterprise |
+| [09 — Common Mistakes](docs/09-common-mistakes.md) | What not to do, and why |
+| [10 — Slash Commands](docs/10-slash-commands.md) | Security-relevant built-in commands |
+| [11 — CLAUDE.md Guide](docs/11-claude-md-guide.md) | What CLAUDE.md is and how to write it safely |
+| [12 — Secrets Management](docs/12-secrets-management.md) | Keeping credentials out of Claude's context |
+| [13 — CI/CD Security](docs/13-ci-cd-guide.md) | Running Claude Code safely in automated pipelines |
 
 ---
 
 ## Examples
 
-### Settings configs
+<details>
+<summary><strong>Settings templates</strong> — copy these into your project</summary>
+
 | File | Use case |
 |------|----------|
-| [examples/settings/settings.minimal.jsonc](examples/settings/settings.minimal.jsonc) | Restrictive starter — good default for any project |
-| [examples/settings/settings.team.jsonc](examples/settings/settings.team.jsonc) | Shared project config for a Node.js/Python team |
-| [examples/settings/settings.enterprise.jsonc](examples/settings/settings.enterprise.jsonc) | Managed policy with ZDR, audit hooks, locked-down modes |
+| [settings.minimal.jsonc](examples/settings/settings.minimal.jsonc) | Restrictive starter — good default for any project |
+| [settings.team.jsonc](examples/settings/settings.team.jsonc) | Shared config for a Node.js/Python team |
+| [settings.enterprise.jsonc](examples/settings/settings.enterprise.jsonc) | Managed policy with audit hooks and locked-down modes |
 
-> **Note:** Files use `.jsonc` (JSON with comments) for readability. Strip comments before placing in `.claude/settings.json`.
+> Strip `//` comments before using — Claude Code reads standard `.json`.
 
-### Hook scripts
-| File | Hook event | What it does |
-|------|-----------|-------------|
-| [examples/hooks/block-dangerous-commands.sh](examples/hooks/block-dangerous-commands.sh) | `PreToolUse` | Blocks Bash commands matching a destructive pattern list |
-| [examples/hooks/pre-tool-audit.sh](examples/hooks/pre-tool-audit.sh) | `PreToolUse` | Writes every tool call to a structured audit log |
-| [examples/hooks/permission-request-logger.sh](examples/hooks/permission-request-logger.sh) | `PermissionRequest` | Logs permission requests; shows how to auto-deny patterns |
-| [examples/hooks/post-tool-notify.sh](examples/hooks/post-tool-notify.sh) | `PostToolUse` | Desktop notification after file edits (Linux + macOS) |
+</details>
 
-### Permission rule references
+<details>
+<summary><strong>Hook scripts</strong> — drop these into your project and wire up in settings.json</summary>
+
+| File | Event | What it does |
+|------|-------|-------------|
+| [block-dangerous-commands.sh](examples/hooks/block-dangerous-commands.sh) | `PreToolUse` | Blocks Bash commands matching a destructive pattern list |
+| [pre-tool-audit.sh](examples/hooks/pre-tool-audit.sh) | `PreToolUse` | Logs every tool call to a structured audit file |
+| [permission-request-logger.sh](examples/hooks/permission-request-logger.sh) | `PermissionRequest` | Logs permission dialogs; shows how to auto-deny patterns |
+| [post-tool-notify.sh](examples/hooks/post-tool-notify.sh) | `PostToolUse` | Desktop notification after file edits |
+
+</details>
+
+<details>
+<summary><strong>Permission rule references</strong></summary>
+
 | File | Summary |
 |------|---------|
-| [examples/rules/bash-allowlist.md](examples/rules/bash-allowlist.md) | Annotated safe Bash patterns by use-case |
-| [examples/rules/mcp-rules.md](examples/rules/mcp-rules.md) | MCP tool scoping syntax and patterns |
+| [bash-allowlist.md](examples/rules/bash-allowlist.md) | Safe Bash patterns organized by use-case |
+| [mcp-rules.md](examples/rules/mcp-rules.md) | MCP tool scoping syntax and patterns |
+
+</details>
 
 ---
 

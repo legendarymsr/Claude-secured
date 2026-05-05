@@ -1,43 +1,30 @@
 # 07 — Network & API Security
 
-Claude Code sends data to Anthropic's API to generate responses. Understanding exactly what leaves your machine — and how to control it — is essential for compliance-sensitive environments.
+Claude Code sends data to Anthropic's API to generate responses. Here's exactly what leaves your machine and how to control it.
 
-## What is sent to Anthropic
+---
+
+## What gets sent to Anthropic
 
 Every API call includes:
 - Your prompts
-- File contents that Claude reads (via `Read` tool)
-- Command output (via `Bash` tool)
-- Tool results from MCP servers
-- Web page contents (via `WebFetch`)
+- File contents Claude reads
+- Shell command output
+- MCP tool results
+- Web page contents (via WebFetch)
 
-This data is encrypted in transit with TLS 1.2+.
+All traffic is encrypted in transit with **TLS 1.2+**.
 
-**Sent only if you opt in:**
-- Session transcripts (via "How is Claude doing?" survey prompts)
-- Feedback content (via `/feedback` command — you choose whether to include the transcript)
+---
 
-## Data retention options
+## What does NOT get sent (unless you opt in)
 
-| Option | What it means |
-|--------|--------------|
-| Standard | Anthropic retains API inputs/outputs per their standard privacy policy |
-| Zero Data Retention (ZDR) | No data stored server-side after the API call completes |
+- Session transcripts — only if you say yes to a quality survey prompt
+- Feedback content — only if you use `/feedback` and choose to include the transcript
 
-ZDR requires an enterprise agreement with Anthropic. Once enabled, it applies to all API calls from your account.
+---
 
-## Telemetry and how to disable it
-
-Claude Code sends operational metrics (latency, error rates, usage patterns — **not code**) to telemetry services. You can opt out:
-
-```bash
-# Environment variables
-export DISABLE_TELEMETRY=1            # Stop operational metrics (Statsig)
-export DISABLE_ERROR_REPORTING=1      # Stop error logs (Sentry)
-export DISABLE_FEEDBACK_COMMAND=1     # Remove the /feedback command
-```
-
-Or in `settings.json`:
+## Telemetry opt-outs
 
 ```json
 {
@@ -48,64 +35,105 @@ Or in `settings.json`:
 }
 ```
 
-## WebFetch domain safety check
+`DISABLE_TELEMETRY` stops operational metrics (latency, error rates — no code is included).  
+`DISABLE_ERROR_REPORTING` stops error logs sent to Sentry.
 
-Before fetching any URL, Claude Code sends the **hostname only** (not the full URL or any path/query parameters) to `api.anthropic.com` to check against a safety blocklist. The result is cached for 5 minutes.
+<details>
+<summary>📖 Full data flow breakdown</summary>
 
-If a domain is blocked and you believe it shouldn't be, you can allowlist it:
+### What Anthropic receives per API call
 
-```json
-{
-  "permissions": {
-    "allow": ["WebFetch(domain:internal.example.com)"]
-  }
-}
-```
+| Data | Sent? | Notes |
+|------|-------|-------|
+| Your prompt | Always | Encrypted in transit |
+| File contents Claude reads | Always (when read) | Only files Claude actually opens |
+| Bash command output | Always (when run) | stdout/stderr of commands |
+| MCP tool results | Always (when called) | Whatever the server returns |
+| WebFetch page content | Always (when fetched) | Full page text |
+| Session transcript | Only if you opt in | Via survey or /feedback |
+| Error logs | Only if enabled | Via Sentry, no code content |
+| Operational metrics | By default | Latency, error rates — no code |
 
-Or disable the preflight check entirely (not recommended):
+### At-rest encryption by provider
 
-```json
-{
-  "skipWebFetchPreflight": true
-}
-```
-
-## Cloud execution (claude.ai/code)
-
-When using Claude Code via the web interface:
-
-- Code runs in **isolated Anthropic-managed VMs**, separate from your local machine
-- Your repository is cloned into the VM for the session
-- GitHub authentication is handled via a secure proxy — your credentials never enter the VM directly
-- Network traffic routes through a security proxy with audit logging
-- VMs are automatically destroyed at the end of the session
-
-This provides stronger isolation than running Claude Code locally, at the cost of your code leaving your infrastructure.
-
-## Using Claude Code with cloud providers
-
-If you access Claude models via Amazon Bedrock or Google Vertex AI, data handling follows those providers' policies:
-
-| Provider | Encryption at rest | Customer-managed keys |
-|----------|------------------|----------------------|
-| Anthropic direct | AES-256 (Anthropic-managed) | ZDR option |
+| Provider | Encryption | Customer-managed keys |
+|----------|-----------|----------------------|
+| Anthropic direct | AES-256 (Anthropic-managed) | Via Zero Data Retention |
 | Amazon Bedrock | AWS-managed or KMS | Yes (CMEK) |
 | Google Vertex AI | Google-managed | Yes (CMEK) |
 
-## Network proxy configuration
+</details>
 
-For environments that route all traffic through a corporate proxy:
+<details>
+<summary>📖 Zero Data Retention (ZDR)</summary>
+
+ZDR is an enterprise option where API inputs and outputs are not stored server-side after the request completes. Available via enterprise agreement with Anthropic.
+
+With ZDR:
+- Prompts, file contents, and outputs are processed in memory only
+- Nothing persists after the API response is returned
+- Useful for compliance requirements (HIPAA, GDPR data minimization, etc.)
+
+Without ZDR, standard Anthropic data retention policies apply. Check the Anthropic privacy policy for current retention periods.
+
+To enable ZDR: contact Anthropic sales. Once enabled, it applies to all API calls from your account.
+
+</details>
+
+<details>
+<summary>📖 WebFetch domain safety check</summary>
+
+Before fetching any URL, Claude Code sends the **hostname only** (not the full URL, path, or query parameters) to `api.anthropic.com` to check against a safety blocklist. The result is cached for 5 minutes.
+
+If a domain is blocked and you believe it shouldn't be, you can allowlist it:
+```json
+{ "permissions": { "allow": ["WebFetch(domain:internal.example.com)"] } }
+```
+
+To disable the preflight check entirely (not recommended):
+```json
+{ "skipWebFetchPreflight": true }
+```
+
+</details>
+
+<details>
+<summary>📖 Cloud execution (claude.ai/code)</summary>
+
+When running Claude Code via the web interface at claude.ai/code:
+
+- Code runs in **isolated Anthropic-managed VMs**, separate from your local machine
+- Your repository is cloned into the VM for the session
+- GitHub authentication is handled via a secure proxy — credentials never enter the VM directly
+- Network traffic routes through a security proxy with audit logging
+- VMs are destroyed at the end of the session — nothing persists
+
+This provides stronger isolation than local execution, at the cost of your code leaving your own infrastructure.
+
+</details>
+
+<details>
+<summary>📖 Corporate proxy configuration</summary>
+
+For environments that route traffic through a corporate proxy:
 
 ```json
 {
   "env": {
     "HTTPS_PROXY": "https://proxy.corp.example.com:8080",
-    "NO_PROXY": "localhost,127.0.0.1"
+    "NO_PROXY": "localhost,127.0.0.1,internal.example.com"
   }
 }
 ```
 
+Claude Code respects standard `HTTPS_PROXY` / `NO_PROXY` environment variables.
+
+</details>
+
+---
+
 ## See also
 
-- [docs/03-settings.md](03-settings.md) — Setting environment variables via settings.json
-- [docs/08-best-practices.md](08-best-practices.md) — Enterprise network configuration guidance
+- [docs/03-settings.md](03-settings.md) — Setting env vars in settings.json
+- [docs/12-secrets-management.md](12-secrets-management.md) — Keeping credentials out of API calls
+- [docs/13-ci-cd-guide.md](13-ci-cd-guide.md) — Network controls in CI

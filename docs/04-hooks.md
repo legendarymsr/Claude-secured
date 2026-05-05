@@ -1,42 +1,150 @@
 # 04 — Hooks
 
-Hooks are shell scripts (or HTTP endpoints) that run automatically at specific points in Claude Code's lifecycle. They are the enforcement layer — the place where you can inspect, log, block, or modify Claude's actions with full programmatic control.
+Hooks are shell scripts that run automatically at specific points in Claude Code's lifecycle. They can inspect, log, block, or modify Claude's actions with full programmatic control.
 
-## Hooks vs. permission rules
+---
 
-Permission rules match tool names and simple patterns. Hooks can do anything a shell script can do:
+## When to use hooks vs. permission rules
 
-| Permission rules | Hooks |
-|-----------------|-------|
-| Match by tool name and command prefix | Match by inspecting the full tool input JSON |
-| Static — defined at config time | Dynamic — run logic at execution time |
-| Block or allow | Block, allow, log, notify, modify input |
-| No output visible | Can write messages shown to user |
+- **Permission rules** — simple categorical decisions (block this command prefix, allow that path)
+- **Hooks** — anything requiring logic (inspect the full command content, log to a file, conditional blocking)
 
-**Use rules for simple categorical decisions. Use hooks for anything requiring logic.**
+---
 
-## How hooks work
+## How a hook works
 
 1. A lifecycle event fires (e.g., Claude is about to run a bash command)
-2. Claude Code serializes the event as JSON and sends it to the hook via **stdin**
-3. The hook script runs, reads stdin, does its work, writes to stdout/stderr
-4. Claude Code reads the exit code and any JSON on stdout to decide what to do
+2. Claude Code sends a JSON payload to the hook script via **stdin**
+3. The script reads stdin, does its work, exits with a code
+4. Claude Code acts on the exit code and any JSON on stdout
 
 ## Exit codes
 
-| Exit code | Meaning | What Claude does |
-|-----------|---------|-----------------|
-| `0` | Success | Reads stdout for a JSON decision; continues |
-| `2` | Hard block | Shows stderr to the user; stops the tool call |
-| Anything else | Non-blocking error | Logs the failure; continues anyway |
+| Code | Meaning |
+|------|---------|
+| `0` | Success — Claude reads stdout for an optional JSON decision |
+| `2` | **Hard block** — tool call is stopped; stderr shown to user |
+| Other | Non-blocking error — execution continues |
 
-**When to use exit 2:** Use it when you want to stop a tool call and surface a clear error message. The stderr text is shown to the user in the Claude Code interface.
+---
 
-**When to use exit 0:** Always, unless you're blocking. Exit 0 with a JSON permissionDecision of `deny` is an alternative to exit 2 — it blocks silently via the permission system rather than showing an error.
+## Minimal working hook
 
-## JSON output format
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+INPUT=$(cat)
+COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 
-Write to stdout to influence Claude's behavior:
+# Block a specific pattern
+if echo "$COMMAND" | grep -qF "rm -rf /"; then
+  echo "Blocked: $COMMAND" >&2
+  exit 2
+fi
+exit 0
+```
+
+Wire it up in `settings.json`:
+```json
+{
+  "hooks": {
+    "PreToolUse": [{
+      "matcher": "Bash",
+      "hooks": [{ "type": "command", "command": "/absolute/path/to/hook.sh" }]
+    }]
+  }
+}
+```
+
+> Always use **absolute paths** for hook scripts. Relative paths break depending on the working directory.
+
+---
+
+## Event types
+
+| Event | When it fires | Can block? |
+|-------|--------------|-----------|
+| `PreToolUse` | Before any tool runs | ✅ Yes |
+| `PostToolUse` | After a tool succeeds | ❌ No (already ran) |
+| `PermissionRequest` | When an approval dialog appears | ✅ Yes (auto-approve/deny) |
+| `UserPromptSubmit` | Before Claude processes a prompt | ✅ Yes |
+| `SessionStart` | When session begins | ❌ Context only |
+| `PostToolUseFailure` | After a tool fails | ❌ No |
+| `SubagentStart/Stop` | Subagent lifecycle | ❌ No |
+| `Notification` | When Claude sends a notification | ❌ No |
+
+<details>
+<summary>📖 Full JSON payload for each event type</summary>
+
+### PreToolUse
+
+**Bash:**
+```json
+{
+  "tool_name": "Bash",
+  "tool_input": { "command": "rm -rf ./dist" }
+}
+```
+
+**Edit:**
+```json
+{
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "/project/src/main.ts",
+    "old_string": "const x = 1",
+    "new_string": "const x = 2"
+  }
+}
+```
+
+**WebFetch:**
+```json
+{
+  "tool_name": "WebFetch",
+  "tool_input": { "url": "https://example.com/data" }
+}
+```
+
+**MCP tool:**
+```json
+{
+  "tool_name": "mcp__github__create_issue",
+  "tool_input": { "title": "Bug report", "body": "..." }
+}
+```
+
+### PostToolUse
+```json
+{
+  "tool_name": "Edit",
+  "tool_input": { "file_path": "src/main.ts", "old_string": "...", "new_string": "..." },
+  "tool_result": { "success": true }
+}
+```
+
+### PermissionRequest
+```json
+{
+  "tool_name": "Bash",
+  "tool_input": { "command": "npm run build" },
+  "permission_type": "bash_command"
+}
+```
+
+### UserPromptSubmit
+```json
+{
+  "prompt": "Delete all the log files and push to production"
+}
+```
+
+</details>
+
+<details>
+<summary>📖 JSON output format — controlling Claude's behavior from a hook</summary>
+
+Write to stdout to influence what Claude does next:
 
 ```json
 {
@@ -44,7 +152,7 @@ Write to stdout to influence Claude's behavior:
     "hookEventName": "PreToolUse",
     "permissionDecision": "deny",
     "permissionDecisionReason": "Matches destructive pattern",
-    "additionalContext": "This will be added to Claude's next context window"
+    "additionalContext": "Use 'rm -rf ./dist' instead of 'rm -rf /' for project cleanup."
   },
   "continue": true
 }
@@ -54,250 +162,103 @@ Write to stdout to influence Claude's behavior:
 
 | Value | Effect |
 |-------|--------|
-| `allow` | Tool runs without showing approval dialog |
-| `deny` | Tool is blocked; reason shown if provided |
-| `ask` | Shows approval dialog to the user |
+| `allow` | Tool runs without approval dialog |
+| `deny` | Tool is blocked |
+| `ask` | Shows approval dialog to user |
 | `defer` | Falls back to normal permission system |
-
-### `continue`
-
-`continue: false` terminates the entire Claude Code session immediately. This is a drastic action — use it only for critical security violations where you want to halt everything. `continue: true` is the normal value for all other cases.
 
 ### `additionalContext`
 
-Text in `additionalContext` is injected into Claude's next context window. Use it to explain *why* a block happened, so Claude can course-correct. For example: `"Command blocked because rm -rf is disallowed. Use specific file deletion instead."` — Claude will see this and try a different approach.
+Text here is injected into Claude's next context window. Use it to explain why a block happened and suggest an alternative — Claude will see it and course-correct.
 
-## Configuring hooks in settings.json
+### `continue: false`
 
-```json
-{
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/absolute/path/to/block-dangerous-commands.sh"
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/absolute/path/to/post-tool-notify.sh"
-          }
-        ]
-      }
-    ]
-  }
-}
-```
+Terminates the entire Claude Code session immediately. Use only for critical security violations. `continue: true` is the normal value.
 
-`matcher` filters by tool name. Use `"*"` to match all tools, `"Bash"` for all bash calls, `"Edit"` for file edits, etc.
+</details>
 
-**Use absolute paths** for hook scripts. Relative paths can break depending on the working directory when Claude Code starts.
+<details>
+<summary>📖 Hook script best practices</summary>
 
-## Event types in detail
-
-### PreToolUse ⚠️ Most important
-
-Fires **before** any tool runs. The hook receives the full tool call as JSON and can block it.
-
-**Stdin payload:**
-```json
-{
-  "tool_name": "Bash",
-  "tool_input": {
-    "command": "rm -rf ./dist"
-  }
-}
-```
-
-For `Edit` tool:
-```json
-{
-  "tool_name": "Edit",
-  "tool_input": {
-    "file_path": "/home/user/project/src/main.ts",
-    "old_string": "const x = 1",
-    "new_string": "const x = 2"
-  }
-}
-```
-
-For `WebFetch`:
-```json
-{
-  "tool_name": "WebFetch",
-  "tool_input": {
-    "url": "https://example.com/data"
-  }
-}
-```
-
-Use `PreToolUse` for: blocking destructive commands, validating inputs, audit logging, inspecting what Claude is about to do.
-
-### PostToolUse
-
-Fires **after** a tool succeeds. Cannot block the action (it already ran) — only observe.
-
-**Stdin payload:**
-```json
-{
-  "tool_name": "Edit",
-  "tool_input": { "file_path": "src/main.ts", "old_string": "...", "new_string": "..." },
-  "tool_result": { "success": true }
-}
-```
-
-Use `PostToolUse` for: desktop notifications, downstream logging, triggering format/lint after edits, recording what changed.
-
-### PermissionRequest
-
-Fires when a permission approval dialog is about to appear. Can auto-approve or auto-deny, bypassing the dialog entirely.
-
-**Stdin payload:**
-```json
-{
-  "tool_name": "Bash",
-  "tool_input": { "command": "npm run build" },
-  "permission_type": "bash_command"
-}
-```
-
-**When to use instead of PreToolUse:** Use `PermissionRequest` when you want to automate the human approval step (e.g., in CI, auto-approve a specific set of commands you've pre-vetted). Use `PreToolUse` when you want to block unconditionally before the permission system even runs.
-
-### UserPromptSubmit
-
-Fires before Claude processes any user prompt. Can reject the prompt before Claude sees it.
-
-**Stdin payload:**
-```json
-{
-  "prompt": "Delete all log files and push to production"
-}
-```
-
-Use for: org-level content policies, blocking certain types of requests in shared environments.
-
-### SessionStart
-
-Fires once when the session begins. Cannot block tool calls. Useful for injecting initial context, logging session start, or setting up environment.
-
-### Other event types
-
-| Event | When | Common use |
-|-------|------|-----------|
-| `PostToolUseFailure` | After a tool fails | Log failures; alert on repeated failures |
-| `SubagentStart` | When a subagent spawns | Track delegated work |
-| `SubagentStop` | When a subagent finishes | Log subagent outcomes |
-| `Notification` | When Claude sends a notification | Forward notifications to Slack/email |
-| `PreCompact` | Before context compaction | Log that compaction is happening |
-| `PostCompact` | After context compaction | Resume work with awareness that context was compressed |
-| `InstructionsLoaded` | When CLAUDE.md is loaded | Log which instructions are active |
-
-## Hook script best practices
-
-### Always use `set -euo pipefail`
-
+### Always use set -euo pipefail
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
 ```
+This exits on any error, treats unset variables as errors, and propagates pipe failures.
 
-This causes the script to exit immediately on any error (`-e`), treat unset variables as errors (`-u`), and propagate pipe failures (`-o pipefail`). Without this, a failed `jq` call might silently pass through.
-
-### Validate that jq is available
-
+### Read stdin once
 ```bash
-if ! command -v jq &>/dev/null; then
-  echo "jq is required but not installed" >&2
-  exit 0  # non-blocking — don't break Claude Code over a missing tool
-fi
-```
-
-### Read stdin once into a variable
-
-```bash
-INPUT=$(cat)
-TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty')
+INPUT=$(cat)  # Read once into variable
+TOOL=$(echo "$INPUT" | jq -r '.tool_name')
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 ```
+stdin is a stream — reading it twice gives nothing the second time.
 
-Reading stdin multiple times won't work — it's a stream. Store it in a variable first.
-
-### Handle empty tool inputs gracefully
-
-Some tool inputs may not have the field you expect. Use `// empty` or `// "unknown"` in jq to avoid null errors:
-
+### Handle missing fields
 ```bash
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 if [[ -z "$COMMAND" ]]; then
-  exit 0  # not a bash command, nothing to check
+  exit 0  # Not a bash command — nothing to check
 fi
 ```
 
-### Escape shell metacharacters in pattern matching
-
-When matching command strings, be careful with regex metacharacters:
-
+### Use grep -F for literal strings (no regex metacharacters)
 ```bash
-# Safe: use grep -F for literal string matching
+# Safe
 if echo "$COMMAND" | grep -qF "rm -rf /"; then ...
 
-# Safe: use case for pattern matching
+# Safer for patterns
 case "$COMMAND" in
-  "rm -rf "*)  exit 2 ;;
+  "rm -rf /"*) exit 2 ;;
 esac
 ```
 
-Avoid passing untrusted command strings directly into shell evaluation.
+### Check if jq is available
+```bash
+if ! command -v jq &>/dev/null; then
+  exit 0  # Don't break Claude Code over a missing tool
+fi
+```
 
-## Security implications by hook type
-
-| Hook | Security level | What a compromised/buggy hook can do |
-|------|---------------|-------------------------------------|
-| `PreToolUse` | Critical | Block legitimate work OR permit dangerous commands |
-| `PermissionRequest` | High | Auto-approve dangerous actions without user seeing them |
-| `UserPromptSubmit` | High | Silently reject or modify user prompts |
-| `PostToolUse` | Medium | Can only observe; cannot undo actions |
-| `SessionStart` | Low | Can only inject context |
-
-**Hook scripts run with your OS user's privileges.** A malicious or buggy hook is a full code execution vector with the same access Claude Code has.
-
-Protect hook scripts:
-- Store them in a version-controlled directory
-- Restrict write permissions: `chmod 755 hook.sh` (owner can write, others only read/execute)
-- Review hooks from third-party sources as carefully as you would any executable
-- In enterprise: use `allowManagedHooksOnly: true` to restrict hooks to admin-approved sources
-
-## What happens if a hook crashes?
-
-If a hook exits with a non-2 code (including crashing), Claude Code treats it as a non-blocking failure and continues. This is intentional — a buggy hook shouldn't break your entire Claude Code session.
-
-However, this also means a hook that crashes when it should block will silently fail to block. Test your hooks against real payloads before deploying them.
-
-## Hook timeouts
-
-Hooks that block indefinitely will stall Claude Code. Keep hooks fast:
-- Logging: should complete in milliseconds
-- Network calls (e.g., sending to Slack): use async or fire-and-forget patterns
-- Complex validation: cache results where possible
-
-There is no built-in timeout per hook invocation. Use `timeout 5 your-script.sh` in the command if you need one:
-
+### Add a timeout to slow hooks
 ```json
 { "type": "command", "command": "timeout 5 /path/to/hook.sh" }
 ```
+Hooks that block indefinitely stall Claude Code — there's no built-in timeout per invocation.
+
+</details>
+
+<details>
+<summary>📖 Security implications by hook type</summary>
+
+Hook scripts run with your OS user's privileges — the same as Claude Code itself. A compromised or buggy hook is a full code execution vector.
+
+| Hook | Risk if compromised |
+|------|-------------------|
+| `PreToolUse` | Can silently permit any dangerous command |
+| `PermissionRequest` | Can auto-approve without user seeing it |
+| `UserPromptSubmit` | Can silently modify or reject prompts |
+| `PostToolUse` | Can only observe — cannot undo |
+| `SessionStart` | Can inject malicious context |
+
+**Protect hook scripts:**
+- Store in version control
+- Set permissions: `chmod 755 hook.sh` (only owner can write)
+- Review hooks from external sources as carefully as any executable
+- Enterprise: use `allowManagedHooksOnly: true` to restrict to admin-approved hooks
+
+**What happens if a hook crashes?**
+
+A hook that exits with any code other than 2 is treated as a non-blocking failure — Claude Code continues. This means a hook that crashes when it should block will silently fail to block. Test hooks against real payloads before deploying.
+
+</details>
+
+---
 
 ## See also
 
-- [docs/02-permissions.md](02-permissions.md) — Permission rules (simpler alternative to hooks for static decisions)
+- [docs/02-permissions.md](02-permissions.md) — Simpler alternative for static rules
 - [examples/hooks/block-dangerous-commands.sh](../examples/hooks/block-dangerous-commands.sh) — PreToolUse block example
-- [examples/hooks/pre-tool-audit.sh](../examples/hooks/pre-tool-audit.sh) — Audit logging example
+- [examples/hooks/pre-tool-audit.sh](../examples/hooks/pre-tool-audit.sh) — Audit logging
 - [examples/hooks/permission-request-logger.sh](../examples/hooks/permission-request-logger.sh) — PermissionRequest example

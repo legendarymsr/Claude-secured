@@ -1,107 +1,106 @@
 # 12 — Secrets & Credential Management
 
-Claude Code sessions involve file reads, shell commands, and API calls — all of which can inadvertently expose credentials. This doc covers how to handle secrets safely when using Claude Code.
+Claude Code reads files and runs commands. If your credentials are in files Claude can read — or in settings committed to git — they will be exposed.
 
-## The threat model
+---
 
-Credentials can leak through Claude Code in several ways:
+## The two rules
 
-1. **Claude reads a secret file** — e.g., `.env`, `~/.aws/credentials`, `~/.ssh/id_rsa`
-2. **A command outputs a secret** — e.g., `printenv`, `cat .env`, `aws configure list`
-3. **Secrets in settings.json** — stored in git and readable by anyone with repo access
-4. **Secrets in CLAUDE.md** — same problem
-5. **Secrets in command history** — if Claude runs a command with a secret as an argument
-6. **Prompt injection triggers exfiltration** — a malicious file manipulates Claude into sending credentials somewhere
+1. **Block credential files** with deny rules so Claude can't read them
+2. **Never put secrets in `settings.json`** — it's committed to git
 
-## Preventing Claude from reading credential files
+---
 
-Use deny rules to block access to credential files at the permission-system level:
+## Block credential files (do this now)
 
+Add to `.claude/settings.json`:
 ```json
 {
   "permissions": {
     "deny": [
-      "Read(./.env)",
-      "Read(./.env.*)",
-      "Read(./.env.local)",
-      "Read(./.env.production)",
-      "Read(./secrets/**)",
-      "Read(./config/credentials*)",
-      "Read(~/config.json)",
-      "Read(~/.aws/**)",
-      "Read(~/.ssh/**)",
-      "Read(~/.gnupg/**)",
-      "Read(~/.netrc)",
-      "Read(~/.npmrc)",
-      "Read(~/.pypirc)",
-      "Read(~/.docker/config.json)",
-      "Read(~/.kube/**)",
-      "Read(~/.config/gh/**)"
+      "Read(./.env)", "Read(./.env.*)",
+      "Read(~/.aws/**)", "Read(~/.ssh/**)",
+      "Read(~/.gnupg/**)", "Read(./secrets/**)",
+      "Read(~/.kube/**)", "Read(~/.docker/config.json)"
     ]
   }
 }
 ```
 
-Place the most sensitive rules (home directory paths) in `~/.claude/settings.json` so they apply across all projects. Place project-specific rules (`.env`, `secrets/`) in `.claude/settings.json`.
+Also add home-directory rules to `~/.claude/settings.json` as a fallback for projects without their own settings.
 
-## Passing secrets to Claude Code sessions
+---
 
-### The right way: shell environment variables
-
-Set credentials in your shell before launching Claude Code. They're available to commands Claude runs without being stored anywhere:
+## Pass secrets via shell environment
 
 ```bash
-export AWS_ACCESS_KEY_ID="AKIA..."
-export AWS_SECRET_ACCESS_KEY="..."
+export ANTHROPIC_API_KEY="sk-ant-..."
+export DATABASE_URL="postgres://user:pass@host/db"
+claude
+```
+
+Claude Code inherits your shell environment. Commands it runs will have access to these variables — but they don't appear in any file Claude reads.
+
+<details>
+<summary>📖 Secrets manager integrations</summary>
+
+### direnv (simplest for teams)
+
+```bash
+# .envrc — add to .gitignore!
 export DATABASE_URL="postgres://..."
-claude
+export API_KEY="..."
 ```
 
-Claude Code inherits your shell's environment. Commands it runs (like `aws s3 ls`) will use these variables automatically.
-
-### Using a secrets manager
-
-For team environments, use a secrets manager to inject credentials at runtime:
-
-**AWS Secrets Manager + direnv:**
 ```bash
-# .envrc (not committed — add to .gitignore)
-export DATABASE_URL=$(aws secretsmanager get-secret-value \
-  --secret-id prod/db-url --query SecretString --output text)
+# .gitignore
+.envrc
 ```
 
-**HashiCorp Vault:**
-```bash
-export API_KEY=$(vault kv get -field=api_key secret/myapp)
-claude
+Add a deny rule so Claude can't read it anyway:
+```json
+{ "permissions": { "deny": ["Read(./.envrc)"] } }
 ```
 
-**1Password CLI:**
+### 1Password CLI
+
 ```bash
 eval $(op signin)
 export GITHUB_TOKEN=$(op item get "GitHub Token" --fields credential)
 claude
 ```
 
-### For CI/CD pipelines
+Or use `op run`:
+```bash
+# .env.tpl — references, not real values (safe to commit)
+DATABASE_URL=op://vault/item/field
 
-In GitHub Actions, use encrypted secrets:
-
-```yaml
-- name: Run Claude Code
-  env:
-    ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-    DATABASE_URL: ${{ secrets.DATABASE_URL }}
-  run: claude -p "run the tests and fix any failures"
+op run --env-file=.env.tpl -- claude
 ```
 
-Never hardcode credentials in workflow files or pass them as command arguments.
+### HashiCorp Vault
 
-## Preventing secrets from appearing in command output
+```bash
+export DB_PASSWORD=$(vault kv get -field=password secret/myapp/db)
+claude
+```
 
-Some commands print secrets when run. Add deny rules or hooks to block them:
+### AWS Secrets Manager
 
-**Deny rules:**
+```bash
+export DB_PASSWORD=$(aws secretsmanager get-secret-value \
+  --secret-id prod/db/password \
+  --query SecretString --output text)
+claude
+```
+
+</details>
+
+<details>
+<summary>📖 Preventing secrets from appearing in command output</summary>
+
+Even if Claude can't read `.env`, a command can print secrets. Add deny rules for common culprits:
+
 ```json
 {
   "permissions": {
@@ -115,7 +114,7 @@ Some commands print secrets when run. Add deny rules or hooks to block them:
 }
 ```
 
-**PreToolUse hook to block secrets in command output:**
+Or use a hook to block commands whose output would contain secrets:
 
 ```bash
 #!/usr/bin/env bash
@@ -123,102 +122,74 @@ set -euo pipefail
 INPUT=$(cat)
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 
-# Block commands that commonly expose secrets
-RISKY_PATTERNS=(
-  "printenv"
-  "cat .*\\.env"
-  "cat .*credentials"
-  "echo.*PASSWORD"
-  "echo.*SECRET"
-  "echo.*API_KEY"
-)
-
-for PATTERN in "${RISKY_PATTERNS[@]}"; do
-  if echo "$COMMAND" | grep -qiE "$PATTERN"; then
-    echo "Command may expose secrets: $COMMAND" >&2
-    exit 2
-  fi
-done
+if echo "$COMMAND" | grep -qiE "printenv|^env$|\.env|credentials"; then
+  echo "Command may expose secrets" >&2
+  exit 2
+fi
 exit 0
 ```
 
-## Secrets in git: detection and prevention
+</details>
 
-### Pre-commit scanning with gitleaks
+<details>
+<summary>📖 Secrets in CI/CD pipelines</summary>
 
-Install [gitleaks](https://github.com/gitleaks/gitleaks) to scan commits for secrets before they're pushed:
-
-```bash
-# Install
-brew install gitleaks  # macOS
-# or: go install github.com/gitleaks/gitleaks/v8@latest
-
-# Scan the current repo
-gitleaks detect --source .
-
-# Use as a pre-commit hook
-gitleaks protect --staged
+In GitHub Actions:
+```yaml
+- name: Run Claude Code
+  env:
+    ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    # DO NOT add production credentials here
+  run: claude --permission-mode auto -p "run tests and fix failures"
 ```
 
-Add to your git hooks (`.git/hooks/pre-commit`):
+Never pass production credentials (`AWS_ACCESS_KEY_ID`, `DATABASE_URL`, etc.) to CI Claude Code sessions unless Claude genuinely needs them for the task — and even then, use read-only scoped credentials.
+
+</details>
+
+<details>
+<summary>📖 If a credential was already exposed</summary>
+
+If Claude read a credential file (e.g., before you added the deny rule), assume the credential is compromised:
+
+1. **Rotate the credential immediately** — don't wait to see if anything bad happened
+2. **Check Anthropic's retention policy** for your account (standard vs. Zero Data Retention)
+3. **Audit the credential's usage logs** — AWS CloudTrail, GitHub audit log, etc.
+4. **Add the deny rule** so it can't happen again
+
+For secrets committed to git, rotation alone isn't enough — remove from history:
 ```bash
-#!/bin/bash
-gitleaks protect --staged --redact
+git filter-repo --path .env --invert-paths
+git push --force --all
 ```
 
-### .gitignore for secret files
+Then notify GitHub/GitLab to scan for the exposed secret in their systems.
 
-```gitignore
-# Credentials and secrets
-.env
-.env.*
-.env.local
-.env.production
-*.pem
-*.key
-*.p12
-*.pfx
-secrets/
-config/credentials*
-.claude/settings.local.json
-```
+</details>
 
-### If a secret was already committed
+<details>
+<summary>📖 The ANTHROPIC_API_KEY</summary>
 
-If credentials were committed to git, rotation is mandatory — the secret is compromised regardless of whether you've "deleted" the file from git, since the object remains in git history.
+Claude Code uses your `ANTHROPIC_API_KEY` for every API call. Treat it as a high-value credential:
 
-1. **Rotate the credential immediately** — treat it as compromised
-2. Remove from history: `git filter-branch` or `git filter-repo`
-3. Force-push all branches
-4. Notify GitHub to scan for the secret: GitHub secret scanning alerts
-
-## The ANTHROPIC_API_KEY
-
-Claude Code uses your `ANTHROPIC_API_KEY` for every API call. Treat it as a highly sensitive credential:
-
-- Store it in your system keychain or a secrets manager, not in `.bashrc`/`.zshrc`
-- Rotate it regularly (quarterly minimum)
-- Use separate API keys for different environments (dev, CI, production)
-- Monitor usage for anomalies in the Anthropic console
-- If compromised: revoke immediately in the Anthropic console, rotate, investigate what was accessed
+- Use separate keys for dev, CI, and production
+- Rotate quarterly (or immediately if suspected compromise)
+- Set spend limits in the Anthropic console
+- Monitor usage for anomalies
+- Store in a secrets manager, not in `.bashrc`
 
 ```bash
-# Recommended: set per-session from a secrets manager
+# Recommended: fetch from secrets manager each session
 export ANTHROPIC_API_KEY=$(op item get "Anthropic API Key" --fields credential)
 claude
 ```
 
-## What Claude Code sends to Anthropic
+</details>
 
-When Claude reads a file containing a secret (even if accidentally), the secret content is sent to the Anthropic API as part of the context. This is why deny rules for credential files are the most important setting in any config.
-
-If Zero Data Retention (ZDR) is configured for your organization, API inputs are not stored server-side after the request completes. Without ZDR, standard retention policies apply.
-
-See [docs/07-network-api-security.md](07-network-api-security.md) for details on what leaves your machine.
+---
 
 ## See also
 
 - [docs/02-permissions.md](02-permissions.md) — Deny rules for credential files
-- [docs/03-settings.md](03-settings.md) — Scope management for deny rules
-- [docs/07-network-api-security.md](07-network-api-security.md) — What data reaches Anthropic
-- [docs/09-common-mistakes.md](09-common-mistakes.md) — Storing secrets in settings.json
+- [docs/03-settings.md](03-settings.md) — Why not to use the `env` block for secrets
+- [docs/07-network-api-security.md](07-network-api-security.md) — What reaches Anthropic's API

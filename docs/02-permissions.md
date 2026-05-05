@@ -1,54 +1,90 @@
 # 02 — Permission System
 
-The permission system is the primary security control in Claude Code. It determines what tools Claude can use, which commands it can run, and whether it must ask before acting. Understanding it deeply is the most important thing you can do to use Claude Code safely.
+Permissions control what Claude Code can do without asking you first. **This is the most important security control in Claude Code.**
 
-## Why permissions matter
+---
 
-Claude Code is not a chatbot — it takes real actions on your machine. Without permissions, a single misunderstood instruction could delete files, push code, or make network requests you didn't intend. Permissions are the gate between Claude's intentions and your system.
+## Quick start
 
-## Permission modes
-
-Every Claude Code session has an active permission mode. You cycle through modes with `Shift+Tab` during a session (a small indicator appears in the UI), or set a default in `settings.json`:
-
-```json
-{ "defaultMode": "default" }
-```
-
-| Mode | Behavior | When to use |
-|------|----------|-------------|
-| `default` | Asks before edits and most commands | Everyday development — the safe starting point |
-| `acceptEdits` | Auto-accepts file edits and basic fs commands (`mkdir`, `touch`, `mv`, `cp`); still asks for other shell commands | When you trust the task but want shell oversight |
-| `plan` | Read-only; Claude can analyze and propose but cannot modify or execute | Reviewing an unfamiliar codebase safely |
-| `auto` | Background classifier evaluates actions; blocks scope escalation and hostile content automatically | Experimental autonomous use — more safety than `bypassPermissions` |
-| `bypassPermissions` | Skips all approval prompts | CI/CD only, with additional safeguards. Never as a daily driver. |
-
-> **`plan` mode** is underused and underrated. Whenever you open an unfamiliar repo, start in `plan` mode — Claude will read, analyze, and propose, giving you a full picture before anything changes.
-
-## Permission rules
-
-Rules are stored in `settings.json` under `permissions.allow`, `permissions.ask`, and `permissions.deny`. They define exactly which tool calls Claude can make without asking, which it must ask about, and which are blocked entirely.
+Add this to `.claude/settings.json` to get a safe baseline:
 
 ```json
 {
   "permissions": {
-    "allow": ["Bash(npm run test)", "Read(./src/**)"],
-    "ask":   ["Bash(git push *)"],
-    "deny":  ["Bash(rm -rf *)", "Read(./.env)"]
+    "allow": ["Bash(npm run test)", "Bash(npm run lint)", "Bash(git status)"],
+    "deny":  ["Read(./.env)", "Read(~/.aws/**)", "Read(~/.ssh/**)"]
   }
 }
 ```
 
-### Evaluation order: deny wins
+- `allow` — runs without asking
+- `deny` — always blocked, even if Claude wants to do it
+- Anything not listed → Claude asks you first (safe default)
 
-The evaluation order is: **deny → ask → allow**. The first matching rule wins.
+---
 
-This means:
-- If a command matches a deny rule, it is blocked — even if it also matches an allow rule
-- If it matches ask but not deny, Claude shows an approval dialog
-- If it matches allow and not deny or ask, it runs without prompting
-- If nothing matches, Claude defaults to asking (fail-closed)
+## Permission modes
 
-**Practical example:**
+Switch with `Shift+Tab` during a session, or set `"defaultMode"` in settings:
+
+| Mode | What happens | Use when |
+|------|-------------|----------|
+| `default` | Claude asks before edits and commands | Everyday use |
+| `acceptEdits` | Auto-approves file edits; still asks for shell commands | You trust the edits |
+| `plan` | Read-only — Claude can analyze but not change anything | Exploring unfamiliar code |
+| `auto` | Background AI classifier evaluates each action | Autonomous use with safety |
+| `bypassPermissions` | No approval prompts at all | CI only, with isolation |
+
+> **Start with `default`.** Use `plan` whenever you open an unfamiliar repo.
+
+<details>
+<summary>📖 How each mode works in detail</summary>
+
+### `default`
+The standard mode. Claude shows an approval dialog before:
+- Any file edit
+- Any shell command (except read-only ones like `ls`, `cat`, `grep`)
+- Any network request
+
+Read-only commands (`ls`, `cat`, `head`, `tail`, `grep`, `find`, `wc`, `diff`, `stat`, `du`, read-only `git`) run automatically in any mode.
+
+### `acceptEdits`
+Automatically approves:
+- File edits (`Edit`, `Write`)
+- Basic filesystem commands: `mkdir`, `touch`, `mv`, `cp`
+
+Still asks before:
+- Shell commands with side effects
+- Network requests
+- Git operations with remote effects
+
+### `plan`
+Claude Code runs entirely in read mode. It can read files, search code, and produce analysis and plans — but every tool call that would modify anything is blocked. Use this when you want Claude's analysis without any risk of changes.
+
+### `auto`
+A background AI classifier evaluates each proposed tool call before it runs. The classifier blocks:
+- Scope escalation (Claude trying to access things outside the current task)
+- Hostile or destructive patterns
+- Actions inconsistent with the stated goal
+
+This is the best mode for autonomous use that still needs some safety. It's experimental — don't rely on it as your only control.
+
+### `bypassPermissions`
+Skips all approval dialogs. Claude runs every tool call immediately. Only safe when:
+- Running inside a container with limited filesystem and network access
+- No production credentials are present in the environment
+- You have compensating controls (strict allow/deny rules, hooks)
+
+Never use `bypassPermissions` as your daily interactive mode.
+
+</details>
+
+---
+
+## Rule syntax
+
+### Evaluation order: **deny → ask → allow — first match wins**
+
 ```json
 {
   "permissions": {
@@ -57,150 +93,145 @@ This means:
   }
 }
 ```
-`npm run test` → matches allow → runs without prompt  
-`npm publish` → matches deny (checked first) → blocked
 
-### Why have an `ask` list?
+`npm run test` → matches allow → runs ✓  
+`npm publish` → matches deny first → blocked ✗
 
-`ask` is useful for operations you want to review every time but not permanently allow or deny:
-- `Bash(git push *)` — you want to see every push before it happens
-- `Bash(npm install *)` — you want to inspect what's being installed
+<details>
+<summary>📖 Full Bash rule syntax</summary>
 
-The alternative to `ask` would be removing from `allow`, which causes the same approval dialog, or adding to `deny`, which blocks it permanently. `ask` is the explicit middle ground.
-
-## Bash rule syntax
-
-### Basic matching
-
-| Pattern | What it matches |
-|---------|----------------|
-| `Bash` | Every bash command |
-| `Bash(npm run build)` | Exact string `npm run build` only |
-| `Bash(npm run *)` | Any command starting with `npm run ` |
-| `Bash(npm*)` | Any command starting with `npm` (including `npmx`, `npm-check`) |
-| `Bash(* --version)` | Any command ending with ` --version` |
-| `Bash(git * main)` | `git` followed by anything followed by `main` |
-
-### Word boundaries: the space matters
-
-A space before `*` enforces a word boundary:
-
+### Exact match
 ```
-Bash(ls *)     → matches: ls -la, ls ./src   does NOT match: lsof, lsblk
-Bash(ls*)      → matches: ls -la, ls ./src,  AND lsof, lsblk
+Bash(npm run build)   → matches only "npm run build"
 ```
 
-This is critical for rules like `Bash(git *)` — without the space this would match any command starting with the letters "git", including a hypothetical `gitdestroy`.
-
-### Compound commands and shell operators
-
-Claude Code understands `&&`, `||`, `;`, `|`, `&`. A rule matching part of a compound command does **not** match the whole thing.
-
-**Example:**
-```json
-{ "permissions": { "allow": ["Bash(npm run test)"] } }
+### Prefix match (most common)
 ```
-- `npm run test` → allowed ✓
-- `npm run test && rm -rf ./dist` → NOT allowed — `rm -rf ./dist` is evaluated separately and fails to match ✗
+Bash(npm run *)       → matches "npm run test", "npm run lint", etc.
+```
 
-When you approve a compound command once with "Yes, don't ask again," Claude saves individual rules for each risky subcommand. Review what gets saved.
+The space before `*` enforces a word boundary:
+- `Bash(ls *)` → matches `ls -la`, `ls ./src` but NOT `lsof`
+- `Bash(ls*)` → matches `ls -la`, `ls ./src` AND `lsof`, `lsblk`
 
-### Process wrappers: stripped automatically
+### Suffix match
+```
+Bash(* --version)     → matches any command ending with "--version"
+```
 
-These wrappers are transparent to rule matching:
+### Middle wildcard
+```
+Bash(git * main)      → matches "git push origin main", "git merge main"
+```
 
-| Stripped (transparent) | Not stripped (must include in rule) |
-|----------------------|-----------------------------------|
-| `timeout`, `time`, `nice`, `nohup`, `stdbuf`, `xargs` | `npx`, `docker exec`, `direnv exec`, `devbox run`, `mise exec` |
+### Compound commands (`&&`, `||`, `;`, `|`)
 
-So `Bash(npm test *)` matches `timeout 30 npm test` automatically.  
-But for `npx jest`, you need `Bash(npx jest *)` explicitly.
+Rules match individual commands — not compound ones. `Bash(safe-cmd *)` does NOT match `safe-cmd && dangerous-cmd`.
 
-## Read / Edit rule syntax
+Each part of a compound command is evaluated separately. If any part fails to match an allow rule, Claude asks before the whole compound runs.
 
-Paths follow gitignore-style patterns. The prefix determines where they resolve from:
+### Process wrappers
+
+These wrappers are stripped before matching (transparent):
+- `timeout`, `time`, `nice`, `nohup`, `stdbuf`, bare `xargs`
+
+So `Bash(npm test *)` also matches `timeout 30 npm test`.
+
+These are NOT stripped (include them in your rule):
+- `npx`, `docker exec`, `direnv exec`, `devbox run`, `mise exec`
+
+For `npx jest`, you need `Bash(npx jest *)` explicitly.
+
+</details>
+
+<details>
+<summary>📖 Read / Edit rule syntax</summary>
+
+Paths use gitignore-style patterns. The prefix sets where they resolve from:
 
 | Prefix | Resolves from | Example |
 |--------|--------------|---------|
-| `//path` | Filesystem root | `Read(//etc/hosts)` |
-| `~/path` | Home directory | `Read(~/.ssh/id_rsa)` |
-| `/path` | Project root | `Edit(/src/**/*.ts)` |
-| `./path` or `path` | Current working directory | `Read(./.env)` |
+| `//` | Filesystem root | `Read(//etc/passwd)` |
+| `~/` | Home directory | `Read(~/.ssh/**)` |
+| `/` | Project root | `Edit(/src/**/*.ts)` |
+| `./` or no prefix | Current working dir | `Read(./.env)` |
 
-`**` matches recursively (any number of subdirectories). `*` matches within a single directory level.
+`**` = match any depth (recursive)  
+`*` = match within one directory level
 
-**Blocking sensitive files:**
+**Block all credential files:**
 ```json
 {
   "permissions": {
     "deny": [
-      "Read(./.env)",
-      "Read(./.env.*)",
-      "Read(~/.ssh/**)",
-      "Read(~/.aws/**)",
-      "Read(./secrets/**)"
+      "Read(./.env)", "Read(./.env.*)",
+      "Read(~/.aws/**)", "Read(~/.ssh/**)",
+      "Read(~/.gnupg/**)", "Read(./secrets/**)"
     ]
   }
 }
 ```
 
-## WebFetch rule syntax
+</details>
 
+<details>
+<summary>📖 WebFetch and MCP rule syntax</summary>
+
+### WebFetch
+```
+WebFetch(domain:example.com)
+```
+Allows fetches to a specific hostname. Without a rule, every WebFetch requires approval. You can't restrict to a path — only the domain.
+
+### MCP tools
+```
+mcp__server-name                  → any tool from this server
+mcp__server-name__tool_name       → one specific tool
+```
+
+**Best practice:** allow only the tools you need, then add a catch-all deny:
 ```json
-"WebFetch(domain:example.com)"
+{
+  "permissions": {
+    "allow": ["mcp__github__list_issues", "mcp__github__get_issue"],
+    "deny":  ["mcp__github"]
+  }
+}
+```
+The catch-all `mcp__github` blocks any new tool the server adds. Without it, new tools are automatically available to Claude.
+
+</details>
+
+<details>
+<summary>📖 Permissions vs. hooks — when to use which</summary>
+
+| Use permission rules when... | Use hooks when... |
+|-----------------------------|------------------|
+| The decision is based on the tool name or a simple command prefix | You need to inspect the full content of a command |
+| You want to block or allow a whole category | You need conditional logic (block only if parameter X matches) |
+| You want a static, committed team policy | You want to log every tool call |
+| The rule is the same regardless of context | The decision depends on runtime state |
+
+Example where hooks are better than rules:
+
+```bash
+# A rule can block "rm -rf *" but not "rm -rf ./dist"
+# A hook can check the exact argument and decide
+COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command')
+if echo "$COMMAND" | grep -qE "rm -rf /(home|root|etc)"; then
+  exit 2  # Block system-level deletions
+fi
+# Allow project-level deletions like rm -rf ./dist
+exit 0
 ```
 
-This allows fetches to `example.com`. Without an allow rule, every WebFetch call requires manual approval.
+</details>
 
-You can't restrict to a specific path — only the domain. Use hooks if you need path-level control.
-
-## MCP rule syntax
-
-```
-mcp__server-name                     → any tool from this server
-mcp__server-name__tool_name          → one specific tool
-```
-
-Server names come from the keys in your `mcpServers` config. See [examples/rules/mcp-rules.md](../examples/rules/mcp-rules.md) for full scoping patterns.
-
-## What "auto-approved" means for read-only commands
-
-These commands run in any mode without prompts: `ls`, `cat`, `head`, `tail`, `grep`, `find`, `wc`, `diff`, `stat`, `du`, and read-only `git` commands.
-
-This is intentional — reading your own files is expected behavior. The risk surface is writes and executions, not reads.
-
-> **Exception:** `find -exec` can run arbitrary commands. Claude Code is aware of this and will prompt for `find` with write/exec flags.
-
-## Choosing the right rule
-
-| Situation | Rule type |
-|-----------|----------|
-| Command is always safe to run automatically | `allow` |
-| Command should always require review | `ask` |
-| Command should never run | `deny` |
-| Not listed anywhere | Defaults to asking (safe) |
-
-## How many rules does a typical project need?
-
-A minimal project might have:
-- 5–10 allow rules for test/build/lint scripts
-- 3–5 deny rules for credentials and dangerous commands
-- 1–2 ask rules for operations like `git push`
-
-Don't over-engineer it. Start minimal and add rules only when you find yourself repeatedly approving the same safe command. See [examples/settings/settings.minimal.jsonc](../examples/settings/settings.minimal.jsonc) for a working starting point.
-
-## Permissions vs. hooks: when to use which
-
-| Use permissions rules when... | Use hooks when... |
-|------------------------------|------------------|
-| The rule is simple (command prefix, path) | You need to inspect the actual content of a command |
-| You want to block/allow categorically | You need conditional logic (block only if parameter X is present) |
-| You want a team-shared policy | You want to log every tool call |
-| The decision is static | The decision depends on runtime state |
+---
 
 ## See also
 
-- [docs/03-settings.md](03-settings.md) — Where rules are stored and scope precedence
-- [docs/04-hooks.md](04-hooks.md) — Dynamic enforcement with hooks
-- [examples/rules/bash-allowlist.md](../examples/rules/bash-allowlist.md) — Safe Bash patterns by use-case
-- [examples/settings/settings.minimal.jsonc](../examples/settings/settings.minimal.jsonc) — Restrictive starter config
+- [docs/03-settings.md](03-settings.md) — Where rules are stored
+- [docs/04-hooks.md](04-hooks.md) — Dynamic enforcement
+- [examples/rules/bash-allowlist.md](../examples/rules/bash-allowlist.md) — Safe Bash patterns
+- [examples/settings/settings.minimal.jsonc](../examples/settings/settings.minimal.jsonc) — Starter config
