@@ -82,6 +82,12 @@ A security guide for [Claude Code](https://code.claude.com) — Anthropic's agen
 
 ---
 
+## Shoutout
+
+[uwu underground](https://discord.gg/uwuunderground) — a community worth knowing.
+
+---
+
 ## License
 
 [GNU General Public License v3.0](LICENSE)
