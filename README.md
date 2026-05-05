@@ -28,6 +28,9 @@ Copy [`examples/settings/settings.minimal.jsonc`](examples/settings/settings.min
 | [docs/08-best-practices.md](docs/08-best-practices.md) | Checklist for individual developers, teams, and enterprise/CI environments |
 | [docs/09-common-mistakes.md](docs/09-common-mistakes.md) | Anti-patterns with their consequences and correct alternatives |
 | [docs/10-slash-commands.md](docs/10-slash-commands.md) | Security-relevant built-in commands and risks of custom slash commands |
+| [docs/11-claude-md-guide.md](docs/11-claude-md-guide.md) | What CLAUDE.md is, how to write it safely, and its security limits |
+| [docs/12-secrets-management.md](docs/12-secrets-management.md) | How to pass credentials to Claude Code without exposing them |
+| [docs/13-ci-cd-guide.md](docs/13-ci-cd-guide.md) | Running Claude Code safely in automated pipelines (GitHub Actions, GitLab CI) |
 
 ---
 
