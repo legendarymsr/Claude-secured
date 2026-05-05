@@ -75,6 +75,13 @@ A security guide for [Claude Code](https://code.claude.com) — Anthropic's agen
 
 ---
 
+## Video resources
+
+- [Claude Code: Full tutorial](https://youtu.be/JaTcjGUDlhk)
+- [Claude Code: Advanced features](https://youtu.be/SXeGudJGnDk)
+
+---
+
 ## License
 
 [GNU General Public License v3.0](LICENSE)
