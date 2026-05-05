@@ -1,0 +1,46 @@
+// Minimal restrictive Claude Code configuration
+// Copy this to .claude/settings.json in your project (strip comments first — Claude Code reads standard JSON)
+// See: docs/02-permissions.md and docs/03-settings.md
+{
+  // Start in default mode: Claude asks before every edit and command
+  "defaultMode": "default",
+
+  "permissions": {
+    "allow": [
+      // Read-only inspection commands
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(find *)",
+      "Bash(grep *)",
+      "Bash(wc *)",
+      "Bash(stat *)",
+      "Bash(diff *)",
+
+      // Read source files freely
+      "Read(./src/**)",
+      "Read(./tests/**)",
+      "Read(./docs/**)",
+      "Read(./README*)",
+      "Read(./package.json)",
+      "Read(./package-lock.json)",
+      "Read(./tsconfig.json)"
+    ],
+
+    "deny": [
+      // Never read credentials or secrets
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./secrets/**)",
+      "Read(~/.aws/**)",
+      "Read(~/.ssh/**)",
+
+      // Never use curl/wget (unexpected outbound requests)
+      "Bash(curl *)",
+      "Bash(wget *)",
+
+      // Never force-push or publish without explicit approval
+      "Bash(git push --force *)",
+      "Bash(npm publish *)"
+    ]
+  }
+}

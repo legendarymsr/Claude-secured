@@ -1,0 +1,85 @@
+// Team project Claude Code configuration
+// Commit this as .claude/settings.json — it applies to everyone on the team
+// See: docs/03-settings.md and docs/08-best-practices.md
+{
+  "defaultMode": "default",
+
+  "permissions": {
+    "allow": [
+      // Test and lint runners (adjust to your actual script names)
+      "Bash(npm run test *)",
+      "Bash(npm run test:unit *)",
+      "Bash(npm run lint *)",
+      "Bash(npm run lint:fix *)",
+      "Bash(npm run build *)",
+      "Bash(npm run typecheck *)",
+      "Bash(python -m pytest *)",
+      "Bash(python -m ruff *)",
+
+      // Read-only git (write git ops still require approval)
+      "Bash(git status)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git show *)",
+      "Bash(git branch *)",
+
+      // Package inspection (not install)
+      "Bash(npm list *)",
+      "Bash(npm outdated *)",
+
+      // Source file access
+      "Read(./src/**)",
+      "Read(./tests/**)",
+      "Read(./lib/**)",
+      "Read(./config/**)",
+      "Read(./docs/**)"
+    ],
+
+    // These require approval but won't prompt repeatedly — use for shared review ops
+    "ask": [
+      "Bash(git push *)",
+      "Bash(git commit *)",
+      "Bash(npm install *)",
+      "Bash(pip install *)"
+    ],
+
+    "deny": [
+      // Credentials — never read these
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./.aws/**)",
+      "Read(~/.aws/**)",
+      "Read(~/.ssh/**)",
+      "Read(./secrets/**)",
+
+      // Dangerous git operations
+      "Bash(git push --force *)",
+      "Bash(git reset --hard *)",
+      "Bash(git clean -f *)",
+
+      // No publishing without explicit session approval
+      "Bash(npm publish *)",
+      "Bash(pip upload *)",
+
+      // No unexpected outbound requests
+      "Bash(curl *)",
+      "Bash(wget *)"
+    ]
+  },
+
+  // Shared hook: log every tool call for team audit trail
+  // Update the path to where the script lives in your repo
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./scripts/claude-audit.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
