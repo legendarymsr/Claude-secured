@@ -1,0 +1,90 @@
+// Enterprise / managed Claude Code configuration
+// Deploy this via MDM or admin tooling as the managed settings file
+// Users cannot override keys set here with project or user settings
+// See: docs/03-settings.md, docs/07-network-api-security.md, docs/08-best-practices.md
+{
+  "defaultMode": "default",
+
+  "permissions": {
+    // Prevent users from switching to unattended mode
+    "disableBypassPermissionsMode": true,
+
+    "allow": [
+      // Read source files (adjust globs to your project structure)
+      "Read(/src/**)",
+      "Read(/tests/**)",
+      "Read(/docs/**)"
+    ],
+
+    "deny": [
+      // Block all credential paths organization-wide
+      "Read(~/.aws/**)",
+      "Read(~/.ssh/**)",
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./secrets/**)",
+      "Read(/etc/**)",
+
+      // No outbound data exfiltration via shell
+      "Bash(curl *)",
+      "Bash(wget *)",
+      "Bash(nc *)",
+
+      // No force operations
+      "Bash(git push --force *)",
+      "Bash(git reset --hard *)",
+      "Bash(rm -rf *)"
+    ]
+  },
+
+  // Only allow MCP servers defined in this managed config
+  "allowManagedMcpServersOnly": true,
+
+  // Only allow hooks defined in this managed config
+  "allowManagedHooksOnly": true,
+
+  // Approved MCP servers (add your vetted servers here)
+  "mcpServers": {
+    // Example: internal tool, pinned to specific binary
+    // "internal-tools": {
+    //   "command": "/usr/local/bin/internal-mcp-server",
+    //   "args": ["--read-only"]
+    // }
+  },
+
+  // Telemetry opt-outs for compliance
+  "env": {
+    "DISABLE_TELEMETRY": "1",
+    "DISABLE_ERROR_REPORTING": "1",
+
+    // Corporate proxy — fill in your proxy URL
+    // "HTTPS_PROXY": "https://proxy.corp.example.com:8080"
+  },
+
+  // Org-wide audit hook on every tool call
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            // Point to your centralized audit script
+            "command": "/opt/corp/claude-audit/pre-tool-audit.sh"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/opt/corp/claude-audit/permission-request-logger.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
