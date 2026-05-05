@@ -84,7 +84,7 @@ A security guide for [Claude Code](https://code.claude.com) — Anthropic's agen
 
 ## Shoutout
 
-[uwu underground](https://discord.gg/uwuunderground) — a community worth knowing.
+real coders listen to @uwu_underground
 
 ---
 
